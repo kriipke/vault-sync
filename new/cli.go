@@ -13,7 +13,7 @@ func main() {
 		fmt.Println("Commands:")
 		fmt.Println("  list <namespace> <kvv2-path>  List secret names")
 		fmt.Println("  pull <namespace> <kvv2-path> [output-dir]  Pull all secrets recursively to files")
-		fmt.Println("  push <namespace> <kvv2-path> <input-dir> [--dry-run]  Push secrets from YAML files to Vault")
+		fmt.Println("  push <namespace> <kvv2-path> [input-dir] [--dry-run]  Push secrets from YAML files to Vault")
 		os.Exit(1)
 	}
 
@@ -90,23 +90,29 @@ func handlePullCommand() {
 }
 
 func handlePushCommand() {
-	if len(os.Args) < 5 {
-		fmt.Printf("Usage: %s push <namespace> <kvv2-path> <input-dir> [--dry-run]\n", os.Args[0])
-		fmt.Println("Example: go run . push my-namespace kv/metadata ./secrets")
+	if len(os.Args) < 4 {
+		fmt.Printf("Usage: %s push <namespace> <kvv2-path> [input-dir] [--dry-run]\n", os.Args[0])
+		fmt.Println("Example: go run . push my-namespace kv/metadata")
+		fmt.Println("Example: go run . push my-namespace kv/metadata ./my-secrets")
+		fmt.Println("If input-dir is not specified, defaults to './vault-secrets'")
 		fmt.Println("Use --dry-run to see what would be changed without actually pushing")
 		os.Exit(1)
 	}
 
 	namespace := os.Args[2]
 	kvPath := os.Args[3]
-	inputDir := os.Args[4]
 	
-	// Check for --dry-run flag
+	// Default input directory if not specified, and parse remaining args
+	inputDir := "./vault-secrets"
 	dryRun := false
-	for _, arg := range os.Args[5:] {
+	
+	// Parse remaining arguments
+	for i := 4; i < len(os.Args); i++ {
+		arg := os.Args[i]
 		if arg == "--dry-run" {
 			dryRun = true
-			break
+		} else if !strings.HasPrefix(arg, "--") {
+			inputDir = arg
 		}
 	}
 

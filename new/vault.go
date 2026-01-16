@@ -263,8 +263,31 @@ func (v *VaultClient) PutSecret(secretPath string, secretData map[string]interfa
 	return nil
 }
 
-func (v *VaultClient) PushSecretsFromFiles(inputDir, basePath string, dryRun bool) error {
-	return filepath.Walk(inputDir, func(filePath string, info os.FileInfo, err error) error {
+func (v *VaultClient) PushSecretsFromFiles(inputDir, kvPath string, dryRun bool) error {
+	// Derive the base path from kvPath for file discovery
+	// kvPath is like "kv/metadata", we need to find files that would map back to secrets under this path
+	var baseDir string
+	
+	// If kvPath contains "kv/metadata", remove it to get the sub-path
+	if strings.HasPrefix(kvPath, "kv/metadata") {
+		subPath := strings.TrimPrefix(kvPath, "kv/metadata")
+		subPath = strings.TrimPrefix(subPath, "/") // Remove leading slash if present
+		if subPath == "" {
+			baseDir = inputDir
+		} else {
+			baseDir = filepath.Join(inputDir, subPath)
+		}
+	} else {
+		// For other paths, use the kvPath as a subdirectory
+		baseDir = filepath.Join(inputDir, strings.TrimPrefix(kvPath, "kv/"))
+	}
+
+	// Check if base directory exists
+	if _, err := os.Stat(baseDir); os.IsNotExist(err) {
+		return fmt.Errorf("directory %s does not exist (derived from vault path %s)", baseDir, kvPath)
+	}
+
+	return filepath.Walk(baseDir, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -287,7 +310,7 @@ func (v *VaultClient) PushSecretsFromFiles(inputDir, basePath string, dryRun boo
 		}
 
 		// Convert file path back to vault path
-		relativePath, err := filepath.Rel(inputDir, filePath)
+		relativePath, err := filepath.Rel(baseDir, filePath)
 		if err != nil {
 			return fmt.Errorf("failed to get relative path: %w", err)
 		}
@@ -296,8 +319,18 @@ func (v *VaultClient) PushSecretsFromFiles(inputDir, basePath string, dryRun boo
 		secretPath := strings.TrimSuffix(relativePath, ".yaml")
 		secretPath = strings.ReplaceAll(secretPath, string(filepath.Separator), "/")
 		
-		// Construct full vault path
-		vaultPath := basePath + "/" + secretPath
+		// Construct full vault path based on the kvPath structure
+		var vaultPath string
+		if strings.HasPrefix(kvPath, "kv/metadata") {
+			if subPath := strings.TrimPrefix(kvPath, "kv/metadata"); subPath != "" {
+				subPath = strings.TrimPrefix(subPath, "/")
+				vaultPath = "kv/metadata/" + subPath + "/" + secretPath
+			} else {
+				vaultPath = "kv/metadata/" + secretPath
+			}
+		} else {
+			vaultPath = kvPath + "/" + secretPath
+		}
 
 		if dryRun {
 			return v.showDryRunDiff(vaultPath, secretData)
@@ -373,7 +406,6 @@ func generateUnifiedDiff(existing, new, filename string) string {
 		maxLines = len(newLines)
 	}
 	
-	contextStart := 0
 	inHunk := false
 	hunkStart := 0
 	hunkLines := []string{}
@@ -394,7 +426,6 @@ func generateUnifiedDiff(existing, new, filename string) string {
 				// Start new hunk
 				inHunk = true
 				hunkStart = max(0, i-3) // 3 lines of context
-				contextStart = hunkStart
 				hunkLines = []string{}
 				
 				// Add context before the change
