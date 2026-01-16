@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/hashicorp/vault-client-go"
-	"github.com/hashicorp/vault-client-go/schema"
 )
 
 func main() {
@@ -32,7 +32,7 @@ func main() {
 
 	client, err := vault.New(
 		vault.WithAddress(vaultAddr),
-		vault.WithRequestTimeout(30),
+		vault.WithRequestTimeout(60),
 	)
 	if err != nil {
 		log.Fatal("Failed to create Vault client:", err)
@@ -44,11 +44,22 @@ func main() {
 
 	client.SetNamespace(namespace)
 
-	ctx := context.Background()
+	// Test connection with a simple health check
+	fmt.Println("Testing Vault connection...")
+	_, err = client.System.ReadHealthStatus(context.Background())
+	if err != nil {
+		log.Fatalf("Cannot connect to Vault: %v", err)
+	}
+	fmt.Println("Vault connection successful")
 
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	fmt.Printf("Attempting to list secrets at path: %s in namespace: %s\n", kvPath, namespace)
+	
 	resp, err := client.Secrets.KvV2List(ctx, kvPath)
 	if err != nil {
-		log.Fatal("Failed to list secrets:", err)
+		log.Fatalf("Failed to list secrets: %v", err)
 	}
 
 	if resp.Data.Keys == nil || len(resp.Data.Keys) == 0 {
