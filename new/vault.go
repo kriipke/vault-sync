@@ -184,19 +184,54 @@ func (v *VaultClient) PullSecretsToFiles(basePath, outputDir string) error {
 }
 
 func (v *VaultClient) writeSecretToFile(secretPath string, secretData map[string]interface{}, basePath, outputDir string) error {
-	// Convert vault path to file path
-	// Remove the base path prefix and convert to relative file path
-	relativePath := strings.TrimPrefix(secretPath, basePath+"/")
+	// Convert vault path to file path that matches what push expects
+	// For basePath "kv/metadata" and secretPath "kv/metadata/app/db", we want "./outputDir/app/db.yaml"
+	// For basePath "kv/metadata/app" and secretPath "kv/metadata/app/db", we want "./outputDir/db.yaml"
 	
-	// Remove kv/metadata or kv/data prefix if present
-	if strings.HasPrefix(relativePath, "kv/metadata/") {
+	var relativePath string
+	
+	if strings.HasPrefix(basePath, "kv/metadata") {
+		// Remove the basePath prefix to get the relative secret path
+		if secretPath == basePath {
+			// Edge case: secret is at the exact base path
+			relativePath = ""
+		} else {
+			// Remove basePath + "/" from secretPath
+			relativePath = strings.TrimPrefix(secretPath, basePath+"/")
+		}
+		
+		// Remove any remaining kv/metadata or kv/data prefixes
 		relativePath = strings.TrimPrefix(relativePath, "kv/metadata/")
-	} else if strings.HasPrefix(relativePath, "kv/data/") {
 		relativePath = strings.TrimPrefix(relativePath, "kv/data/")
+	} else {
+		// For non-kv/metadata paths, use the full relative path
+		relativePath = strings.TrimPrefix(secretPath, basePath+"/")
+	}
+	
+	// If we have a subpath in basePath, we need to account for it in the file structure
+	var targetDir string
+	if strings.HasPrefix(basePath, "kv/metadata") {
+		subPath := strings.TrimPrefix(basePath, "kv/metadata")
+		subPath = strings.TrimPrefix(subPath, "/")
+		if subPath != "" {
+			// basePath has a subpath, so files should go in outputDir/subPath/
+			targetDir = filepath.Join(outputDir, subPath)
+		} else {
+			// basePath is just "kv/metadata", files go directly in outputDir
+			targetDir = outputDir
+		}
+	} else {
+		targetDir = outputDir
 	}
 	
 	// Create file path with .yaml extension
-	filePath := filepath.Join(outputDir, relativePath+".yaml")
+	var filePath string
+	if relativePath == "" {
+		// Handle edge case where secret name would be empty
+		return fmt.Errorf("cannot determine file name for secret %s", secretPath)
+	}
+	
+	filePath = filepath.Join(targetDir, relativePath+".yaml")
 	
 	// Create directory structure
 	dir := filepath.Dir(filePath)
