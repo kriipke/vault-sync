@@ -24,6 +24,7 @@ func main() {
 	if vaultAddr == "" {
 		log.Fatal("VAULT_ADDR environment variable is required")
 	}
+	fmt.Printf("Using Vault address: %s\n", vaultAddr)
 
 	vaultToken := os.Getenv("VAULT_TOKEN")
 	if vaultToken == "" {
