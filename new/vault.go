@@ -79,10 +79,11 @@ func (v *VaultClient) ListSecrets(kvPath string) ([]string, error) {
 func (v *VaultClient) GetSecret(secretPath string) (map[string]interface{}, error) {
 	// Convert metadata path to data path for KVv2
 	dataPath := secretPath
-	if len(secretPath) >= 9 && secretPath[:9] == "kv/metadata" {
+	if len(secretPath) >= 11 && secretPath[:11] == "kv/metadata" {
 		dataPath = "kv/data" + secretPath[11:]
 	}
 
+	fmt.Printf("Debug: Getting secret from path: %s (converted to: %s)\n", secretPath, dataPath)
 	url := fmt.Sprintf("%s/v1/%s", v.Address, dataPath)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -141,7 +142,14 @@ func (v *VaultClient) pullSecretsRecursivelyHelper(currentPath string, secrets m
 			}
 		} else {
 			// It's a secret - fetch its data
-			secretData, err := v.GetSecret(currentPath + "/" + key)
+			// Build correct path for secret data
+			secretPath := currentPath + "/" + key
+			// Convert from metadata path to data path
+			if len(currentPath) >= 11 && currentPath[:11] == "kv/metadata" {
+				secretPath = "kv/data" + currentPath[11:] + "/" + key
+			}
+			
+			secretData, err := v.GetSecret(secretPath)
 			if err != nil {
 				fmt.Printf("Warning: Failed to get secret %s: %v\n", fullPath, err)
 				continue
