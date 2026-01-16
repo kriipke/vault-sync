@@ -29,7 +29,8 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	logger.Debug("Creating Vault client", 
 		"addr", cfg.VaultAddr,
 		"namespace", cfg.VaultNamespace,
-		"kv_mount", cfg.KVMount)
+		"kv_mount", cfg.KVMount,
+		"token_set", cfg.VaultToken != "")
 	
 	client, err := vault.New(
 		vault.WithAddress(cfg.VaultAddr),
@@ -68,12 +69,23 @@ func (c *Client) ListSecrets(ctx context.Context, path string) ([]string, error)
 			WithContext("mount", c.config.KVMount)
 	}
 
-	logger.DebugCtx(ctx, "Listing secrets", "path", listPath, "mount", c.config.KVMount)
+	logger.DebugCtx(ctx, "Listing secrets", 
+		"path", listPath, 
+		"mount", c.config.KVMount,
+		"namespace", c.config.VaultNamespace,
+		"vault_addr", c.config.VaultAddr)
+
+	// Ensure namespace is set before making the API call
+	if c.config.VaultNamespace != "" {
+		c.client.SetNamespace(c.config.VaultNamespace)
+		logger.DebugCtx(ctx, "Set Vault namespace for API call", "namespace", c.config.VaultNamespace)
+	}
 
 	resp, err := c.client.Secrets.KvV2List(ctx, listPath, vault.WithMountPath(c.config.KVMount))
 	if err != nil {
 		vaultErr := errors.NewWithPath("list_secrets", listPath, err).
 			WithContext("mount", c.config.KVMount).
+			WithContext("namespace", c.config.VaultNamespace).
 			WithContext("duration_ms", time.Since(start).Milliseconds())
 		
 		// Add more context for different error types
@@ -84,6 +96,9 @@ func (c *Client) ListSecrets(ctx context.Context, path string) ([]string, error)
 			
 			logger.ErrorCtx(ctx, "Vault API error details", 
 				"path", listPath,
+				"mount", c.config.KVMount,
+				"namespace", c.config.VaultNamespace,
+				"vault_addr", c.config.VaultAddr,
 				"status_code", responseErr.StatusCode,
 				"vault_errors", responseErr.Errors)
 			
@@ -118,6 +133,9 @@ func (c *Client) ListSecrets(ctx context.Context, path string) ([]string, error)
 
 	logger.DebugCtx(ctx, "Listed secrets successfully", 
 		"path", listPath,
+		"mount", c.config.KVMount,
+		"namespace", c.config.VaultNamespace,
+		"vault_addr", c.config.VaultAddr,
 		"count", len(secrets),
 		"duration_ms", time.Since(start).Milliseconds())
 
