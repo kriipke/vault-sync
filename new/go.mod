@@ -2,7 +2,10 @@ module vault-list-secrets
 
 go 1.21
 
-require github.com/hashicorp/vault-client-go v0.4.3
+require (
+	github.com/hashicorp/vault-client-go v0.4.3
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect

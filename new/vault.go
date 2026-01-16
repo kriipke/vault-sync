@@ -5,7 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type VaultClient struct {
@@ -159,4 +164,55 @@ func (v *VaultClient) pullSecretsRecursivelyHelper(currentPath string, secrets m
 	}
 
 	return secrets, nil
+}
+
+func (v *VaultClient) PullSecretsToFiles(basePath, outputDir string) error {
+	secrets, err := v.PullSecretsRecursively(basePath)
+	if err != nil {
+		return fmt.Errorf("failed to pull secrets: %w", err)
+	}
+
+	for secretPath, secretData := range secrets {
+		if err := v.writeSecretToFile(secretPath, secretData, basePath, outputDir); err != nil {
+			fmt.Printf("Warning: Failed to write secret %s: %v\n", secretPath, err)
+		}
+	}
+
+	return nil
+}
+
+func (v *VaultClient) writeSecretToFile(secretPath string, secretData map[string]interface{}, basePath, outputDir string) error {
+	// Convert vault path to file path
+	// Remove the base path prefix and convert to relative file path
+	relativePath := strings.TrimPrefix(secretPath, basePath+"/")
+	
+	// Remove kv/metadata or kv/data prefix if present
+	if strings.HasPrefix(relativePath, "kv/metadata/") {
+		relativePath = strings.TrimPrefix(relativePath, "kv/metadata/")
+	} else if strings.HasPrefix(relativePath, "kv/data/") {
+		relativePath = strings.TrimPrefix(relativePath, "kv/data/")
+	}
+	
+	// Create file path with .yaml extension
+	filePath := filepath.Join(outputDir, relativePath+".yaml")
+	
+	// Create directory structure
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
+	// Convert to YAML
+	yamlData, err := yaml.Marshal(secretData)
+	if err != nil {
+		return fmt.Errorf("failed to convert to YAML: %w", err)
+	}
+
+	// Write to file
+	if err := os.WriteFile(filePath, yamlData, 0644); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", filePath, err)
+	}
+
+	fmt.Printf("Written: %s\n", filePath)
+	return nil
 }

@@ -12,7 +12,7 @@ func main() {
 		fmt.Printf("Usage: %s <command> [args...]\n", os.Args[0])
 		fmt.Println("Commands:")
 		fmt.Println("  list <namespace> <kvv2-path>  List secret names")
-		fmt.Println("  pull <namespace> <kvv2-path>  Pull all secrets recursively")
+		fmt.Println("  pull <namespace> <kvv2-path> [output-dir]  Pull all secrets recursively to files")
 		os.Exit(1)
 	}
 
@@ -69,13 +69,20 @@ func handleListCommand() {
 
 func handlePullCommand() {
 	if len(os.Args) < 4 {
-		fmt.Printf("Usage: %s pull <namespace> <kvv2-path>\n", os.Args[0])
-		fmt.Println("Example: go run . pull my-namespace kv/metadata")
+		fmt.Printf("Usage: %s pull <namespace> <kvv2-path> [output-dir]\n", os.Args[0])
+		fmt.Println("Example: go run . pull my-namespace kv/metadata ./secrets")
+		fmt.Println("If output-dir is not specified, defaults to './vault-secrets'")
 		os.Exit(1)
 	}
 
 	namespace := os.Args[2]
 	kvPath := os.Args[3]
+	
+	// Default output directory if not specified
+	outputDir := "./vault-secrets"
+	if len(os.Args) > 4 {
+		outputDir = os.Args[4]
+	}
 
 	vaultAddr := os.Getenv("VAULT_ADDR")
 	if vaultAddr == "" {
@@ -89,25 +96,12 @@ func handlePullCommand() {
 
 	client := NewVaultClient(vaultAddr, vaultToken, namespace)
 
-	fmt.Printf("Pulling all secrets recursively from %s in namespace %s...\n", kvPath, namespace)
-	secrets, err := client.PullSecretsRecursively(kvPath)
+	fmt.Printf("Pulling all secrets recursively from %s in namespace %s to %s...\n", kvPath, namespace, outputDir)
+	
+	err := client.PullSecretsToFiles(kvPath, outputDir)
 	if err != nil {
-		log.Fatalf("Failed to pull secrets: %v", err)
+		log.Fatalf("Failed to pull secrets to files: %v", err)
 	}
 
-	if len(secrets) == 0 {
-		fmt.Println("No secrets found at the specified path")
-		return
-	}
-
-	fmt.Printf("\nFound %d secrets:\n", len(secrets))
-	for path, data := range secrets {
-		fmt.Printf("\n--- %s ---\n", path)
-		jsonData, err := json.MarshalIndent(data, "", "  ")
-		if err != nil {
-			fmt.Printf("Error formatting secret: %v\n", err)
-			continue
-		}
-		fmt.Println(string(jsonData))
-	}
+	fmt.Printf("\nCompleted! Secrets have been saved to %s as YAML files\n", outputDir)
 }
