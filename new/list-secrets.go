@@ -13,7 +13,7 @@ import (
 func main() {
 	if len(os.Args) < 3 {
 		fmt.Printf("Usage: %s <namespace> <kvv2-path>\n", os.Args[0])
-		fmt.Println("Example: go run list-secrets.go my-namespace secret/data")
+		fmt.Println("Example: go run list-secrets.go my-namespace kv/metadata")
 		os.Exit(1)
 	}
 
@@ -45,13 +45,8 @@ func main() {
 
 	client.SetNamespace(namespace)
 
-	// Test connection with a simple health check
-	fmt.Println("Testing Vault connection...")
-	_, err = client.System.ReadHealthStatus(context.Background())
-	if err != nil {
-		log.Fatalf("Cannot connect to Vault: %v", err)
-	}
-	fmt.Println("Vault connection successful")
+	// Test connection - skip health check for HCP Vault as it may not be accessible
+	fmt.Println("Skipping health check for HCP Vault...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
