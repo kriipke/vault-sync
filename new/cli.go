@@ -1,10 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 )
 
 func main() {
@@ -13,6 +13,7 @@ func main() {
 		fmt.Println("Commands:")
 		fmt.Println("  list <namespace> <kvv2-path>  List secret names")
 		fmt.Println("  pull <namespace> <kvv2-path> [output-dir]  Pull all secrets recursively to files")
+		fmt.Println("  push <namespace> <kvv2-path> <input-dir> [--dry-run]  Push secrets from YAML files to Vault")
 		os.Exit(1)
 	}
 
@@ -23,6 +24,8 @@ func main() {
 		handleListCommand()
 	case "pull":
 		handlePullCommand()
+	case "push":
+		handlePushCommand()
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		os.Exit(1)
@@ -39,17 +42,7 @@ func handleListCommand() {
 	namespace := os.Args[2]
 	kvPath := os.Args[3]
 
-	vaultAddr := os.Getenv("VAULT_ADDR")
-	if vaultAddr == "" {
-		log.Fatal("VAULT_ADDR environment variable is required")
-	}
-
-	vaultToken := os.Getenv("VAULT_TOKEN")
-	if vaultToken == "" {
-		log.Fatal("VAULT_TOKEN environment variable is required")
-	}
-
-	client := NewVaultClient(vaultAddr, vaultToken, namespace)
+	client := getVaultClient(namespace)
 
 	secrets, err := client.ListSecrets(kvPath)
 	if err != nil {
@@ -80,10 +73,64 @@ func handlePullCommand() {
 	
 	// Default output directory if not specified
 	outputDir := "./vault-secrets"
-	if len(os.Args) > 4 {
+	if len(os.Args) > 4 && !strings.HasPrefix(os.Args[4], "--") {
 		outputDir = os.Args[4]
 	}
 
+	client := getVaultClient(namespace)
+
+	fmt.Printf("Pulling all secrets recursively from %s in namespace %s to %s...\n", kvPath, namespace, outputDir)
+	
+	err := client.PullSecretsToFiles(kvPath, outputDir)
+	if err != nil {
+		log.Fatalf("Failed to pull secrets to files: %v", err)
+	}
+
+	fmt.Printf("\nCompleted! Secrets have been saved to %s as YAML files\n", outputDir)
+}
+
+func handlePushCommand() {
+	if len(os.Args) < 5 {
+		fmt.Printf("Usage: %s push <namespace> <kvv2-path> <input-dir> [--dry-run]\n", os.Args[0])
+		fmt.Println("Example: go run . push my-namespace kv/metadata ./secrets")
+		fmt.Println("Use --dry-run to see what would be changed without actually pushing")
+		os.Exit(1)
+	}
+
+	namespace := os.Args[2]
+	kvPath := os.Args[3]
+	inputDir := os.Args[4]
+	
+	// Check for --dry-run flag
+	dryRun := false
+	for _, arg := range os.Args[5:] {
+		if arg == "--dry-run" {
+			dryRun = true
+			break
+		}
+	}
+
+	client := getVaultClient(namespace)
+
+	if dryRun {
+		fmt.Printf("DRY RUN: Showing what would be changed when pushing from %s to %s in namespace %s...\n", inputDir, kvPath, namespace)
+	} else {
+		fmt.Printf("Pushing secrets from %s to %s in namespace %s...\n", inputDir, kvPath, namespace)
+	}
+
+	err := client.PushSecretsFromFiles(inputDir, kvPath, dryRun)
+	if err != nil {
+		log.Fatalf("Failed to push secrets: %v", err)
+	}
+
+	if dryRun {
+		fmt.Printf("\nDry run completed! Use without --dry-run to actually push changes.\n")
+	} else {
+		fmt.Printf("\nCompleted! Secrets have been pushed to Vault.\n")
+	}
+}
+
+func getVaultClient(namespace string) *VaultClient {
 	vaultAddr := os.Getenv("VAULT_ADDR")
 	if vaultAddr == "" {
 		log.Fatal("VAULT_ADDR environment variable is required")
@@ -94,14 +141,5 @@ func handlePullCommand() {
 		log.Fatal("VAULT_TOKEN environment variable is required")
 	}
 
-	client := NewVaultClient(vaultAddr, vaultToken, namespace)
-
-	fmt.Printf("Pulling all secrets recursively from %s in namespace %s to %s...\n", kvPath, namespace, outputDir)
-	
-	err := client.PullSecretsToFiles(kvPath, outputDir)
-	if err != nil {
-		log.Fatalf("Failed to pull secrets to files: %v", err)
-	}
-
-	fmt.Printf("\nCompleted! Secrets have been saved to %s as YAML files\n", outputDir)
+	return NewVaultClient(vaultAddr, vaultToken, namespace)
 }

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -215,4 +217,322 @@ func (v *VaultClient) writeSecretToFile(secretPath string, secretData map[string
 
 	fmt.Printf("Written: %s\n", filePath)
 	return nil
+}
+
+func (v *VaultClient) PutSecret(secretPath string, secretData map[string]interface{}) error {
+	// Ensure we're using the data path for KVv2
+	dataPath := secretPath
+	if strings.HasPrefix(secretPath, "kv/metadata/") {
+		dataPath = "kv/data/" + strings.TrimPrefix(secretPath, "kv/metadata/")
+	} else if !strings.HasPrefix(secretPath, "kv/data/") {
+		dataPath = "kv/data/" + secretPath
+	}
+
+	url := fmt.Sprintf("%s/v1/%s", v.Address, dataPath)
+
+	// KVv2 requires wrapping data in a "data" field
+	payload := map[string]interface{}{
+		"data": secretData,
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, strings.NewReader(string(jsonData)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("X-Vault-Token", v.Token)
+	req.Header.Set("X-Vault-Namespace", v.Namespace)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := v.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+func (v *VaultClient) PushSecretsFromFiles(inputDir, basePath string, dryRun bool) error {
+	return filepath.Walk(inputDir, func(filePath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories and non-YAML files
+		if info.IsDir() || !strings.HasSuffix(filePath, ".yaml") {
+			return nil
+		}
+
+		// Read YAML file
+		yamlData, err := os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("failed to read file %s: %w", filePath, err)
+		}
+
+		// Parse YAML
+		var secretData map[string]interface{}
+		if err := yaml.Unmarshal(yamlData, &secretData); err != nil {
+			return fmt.Errorf("failed to parse YAML in %s: %w", filePath, err)
+		}
+
+		// Convert file path back to vault path
+		relativePath, err := filepath.Rel(inputDir, filePath)
+		if err != nil {
+			return fmt.Errorf("failed to get relative path: %w", err)
+		}
+
+		// Remove .yaml extension and convert to vault path
+		secretPath := strings.TrimSuffix(relativePath, ".yaml")
+		secretPath = strings.ReplaceAll(secretPath, string(filepath.Separator), "/")
+		
+		// Construct full vault path
+		vaultPath := basePath + "/" + secretPath
+
+		if dryRun {
+			return v.showDryRunDiff(vaultPath, secretData)
+		} else {
+			fmt.Printf("Pushing: %s\n", vaultPath)
+			return v.PutSecret(vaultPath, secretData)
+		}
+	})
+}
+
+func (v *VaultClient) showDryRunDiff(vaultPath string, newData map[string]interface{}) error {
+	// Try to get existing secret
+	existingData, err := v.GetSecret(vaultPath)
+	
+	var existingYaml []byte
+	if err != nil {
+		// Secret doesn't exist, use empty content
+		existingYaml = []byte{}
+	} else {
+		existingYaml, _ = yaml.Marshal(existingData)
+	}
+	
+	newYaml, _ := yaml.Marshal(newData)
+	
+	// Generate unified diff
+	var diffOutput string
+	
+	if err != nil {
+		// New file case
+		var newFileDiff bytes.Buffer
+		newFileDiff.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", vaultPath, vaultPath))
+		newFileDiff.WriteString("new file mode 100644\n")
+		newFileDiff.WriteString(fmt.Sprintf("index 0000000..%s\n", generateShortHash(string(newYaml))))
+		newFileDiff.WriteString("--- /dev/null\n")
+		newFileDiff.WriteString(fmt.Sprintf("+++ b/%s\n", vaultPath))
+		for _, line := range strings.Split(string(newYaml), "\n") {
+			if line != "" || strings.HasSuffix(string(newYaml), "\n") {
+				newFileDiff.WriteString(fmt.Sprintf("+%s\n", line))
+			}
+		}
+		diffOutput = newFileDiff.String()
+	} else {
+		diffOutput = generateUnifiedDiff(string(existingYaml), string(newYaml), vaultPath)
+	}
+	
+	// Only output if there are changes
+	if diffOutput != "" {
+		outputDiff(diffOutput)
+	}
+	
+	return nil
+}
+
+func generateUnifiedDiff(existing, new, filename string) string {
+	if existing == new {
+		return "" // No changes
+	}
+	
+	existingLines := strings.Split(existing, "\n")
+	newLines := strings.Split(new, "\n")
+	
+	var diff bytes.Buffer
+	
+	// Header
+	diff.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", filename, filename))
+	diff.WriteString(fmt.Sprintf("index %s..%s 100644\n", generateShortHash(existing), generateShortHash(new)))
+	diff.WriteString(fmt.Sprintf("--- a/%s\n", filename))
+	diff.WriteString(fmt.Sprintf("+++ b/%s\n", filename))
+	
+	// Simple line-by-line diff (basic implementation)
+	maxLines := len(existingLines)
+	if len(newLines) > maxLines {
+		maxLines = len(newLines)
+	}
+	
+	contextStart := 0
+	inHunk := false
+	hunkStart := 0
+	hunkLines := []string{}
+	
+	for i := 0; i < maxLines; i++ {
+		existingLine := ""
+		newLine := ""
+		
+		if i < len(existingLines) {
+			existingLine = existingLines[i]
+		}
+		if i < len(newLines) {
+			newLine = newLines[i]
+		}
+		
+		if existingLine != newLine {
+			if !inHunk {
+				// Start new hunk
+				inHunk = true
+				hunkStart = max(0, i-3) // 3 lines of context
+				contextStart = hunkStart
+				hunkLines = []string{}
+				
+				// Add context before the change
+				for j := hunkStart; j < i; j++ {
+					if j < len(existingLines) {
+						hunkLines = append(hunkLines, " "+existingLines[j])
+					}
+				}
+			}
+			
+			// Add removed line
+			if i < len(existingLines) && existingLine != "" {
+				hunkLines = append(hunkLines, "-"+existingLine)
+			}
+			// Add added line
+			if i < len(newLines) && newLine != "" {
+				hunkLines = append(hunkLines, "+"+newLine)
+			}
+		} else if inHunk {
+			// Add context line
+			hunkLines = append(hunkLines, " "+existingLine)
+			
+			// Check if we should end the hunk (after 3 context lines)
+			contextCount := 0
+			for j := len(hunkLines) - 1; j >= 0 && strings.HasPrefix(hunkLines[j], " "); j-- {
+				contextCount++
+			}
+			
+			if contextCount >= 3 {
+				// End hunk
+				writeHunk(&diff, hunkStart, i-contextCount+1, len(existingLines), len(newLines), hunkLines[:len(hunkLines)-contextCount+3])
+				inHunk = false
+			}
+		}
+	}
+	
+	// Close any remaining hunk
+	if inHunk {
+		writeHunk(&diff, hunkStart, maxLines, len(existingLines), len(newLines), hunkLines)
+	}
+	
+	return diff.String()
+}
+
+func writeHunk(diff *bytes.Buffer, start, end, oldLen, newLen int, lines []string) {
+	oldCount := 0
+	newCount := 0
+	
+	for _, line := range lines {
+		if strings.HasPrefix(line, "-") || strings.HasPrefix(line, " ") {
+			oldCount++
+		}
+		if strings.HasPrefix(line, "+") || strings.HasPrefix(line, " ") {
+			newCount++
+		}
+	}
+	
+	diff.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", start+1, oldCount, start+1, newCount))
+	for _, line := range lines {
+		diff.WriteString(line + "\n")
+	}
+}
+
+func generateShortHash(content string) string {
+	// Simple hash simulation (first 7 chars of a basic hash)
+	hash := 0
+	for _, c := range content {
+		hash = hash*31 + int(c)
+	}
+	if hash < 0 {
+		hash = -hash
+	}
+	return fmt.Sprintf("%07x", hash%0xfffffff)
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+var diffTool string
+var diffToolDetected bool
+
+func detectDiffTool() string {
+	if diffToolDetected {
+		return diffTool
+	}
+	
+	diffToolDetected = true
+	
+	// Check for diff tools in order of preference
+	tools := []string{"delta", "difftastic", "diff-so-fancy"}
+	
+	for _, tool := range tools {
+		if _, err := exec.LookPath(tool); err == nil {
+			diffTool = tool
+			return diffTool
+		}
+	}
+	
+	// No fancy diff tool found
+	diffTool = ""
+	return diffTool
+}
+
+func outputDiff(diffContent string) {
+	tool := detectDiffTool()
+	
+	if tool == "" {
+		// No external tool, output directly
+		fmt.Print(diffContent)
+		return
+	}
+	
+	// Pipe diff content to external tool
+	var cmd *exec.Cmd
+	
+	switch tool {
+	case "delta":
+		cmd = exec.Command("delta", "--no-gitconfig")
+	case "difftastic":
+		cmd = exec.Command("difftastic", "--display=inline")
+	case "diff-so-fancy":
+		cmd = exec.Command("diff-so-fancy")
+	default:
+		// Fallback
+		fmt.Print(diffContent)
+		return
+	}
+	
+	cmd.Stdin = strings.NewReader(diffContent)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	
+	if err := cmd.Run(); err != nil {
+		// If external tool fails, fallback to plain output
+		fmt.Print(diffContent)
+	}
 }
