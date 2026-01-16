@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -15,6 +16,8 @@ type Config struct {
 	OutputDir      string
 	DryRun         bool
 	AutoApprove    bool
+	Verbose        bool
+	LogLevel       slog.Level
 }
 
 func New() *Config {
@@ -29,6 +32,8 @@ func New() *Config {
 		OutputDir:      filepath.Join(homeDir, ".vault-sync"),
 		DryRun:         false,
 		AutoApprove:    false,
+		Verbose:        false,
+		LogLevel:       slog.LevelInfo,
 	}
 }
 

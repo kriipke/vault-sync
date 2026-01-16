@@ -2,9 +2,10 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/spf13/cobra"
+	"vault-sync/internal/errors"
+	"vault-sync/internal/logger"
 	"vault-sync/internal/push"
 	"vault-sync/internal/vault"
 )
@@ -16,25 +17,30 @@ var pushCmd = &cobra.Command{
 For each secret, it fetches the current value from Vault, produces a human-readable
 diff, and prompts the user for approval before writing (unless --yes is used).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := context.Background()
+		
 		// Get flag values
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		autoApprove, _ := cmd.Flags().GetBool("yes")
 		
 		cfg.DryRun = dryRun
 		cfg.AutoApprove = autoApprove
+		
+		logger.InfoCtx(ctx, "Starting push command", 
+			"dry_run", dryRun, 
+			"auto_approve", autoApprove)
 
 		if err := cfg.Validate(); err != nil {
-			return fmt.Errorf("configuration error: %w", err)
+			return errors.Wrap(err, "validate_config")
 		}
 
 		client, err := vault.NewClient(cfg)
 		if err != nil {
-			return fmt.Errorf("failed to create Vault client: %w", err)
+			return errors.Wrap(err, "create_vault_client")
 		}
 
 		pusher := push.New(client, cfg)
 		
-		ctx := context.Background()
 		return pusher.Push(ctx)
 	},
 }

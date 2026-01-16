@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"log/slog"
+
 	"github.com/spf13/cobra"
 	"vault-sync/internal/config"
+	"vault-sync/internal/logger"
 )
 
 var cfg *config.Config
@@ -31,8 +34,54 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfg.KVMount, "kv-mount", cfg.KVMount, "KV v2 mount name")
 	rootCmd.PersistentFlags().StringVar(&cfg.BasePath, "base-path", cfg.BasePath, "Base path in Vault to sync from")
 	rootCmd.PersistentFlags().StringVar(&cfg.OutputDir, "output-dir", cfg.OutputDir, "Local directory to sync to (default: ~/.vault-sync)")
+	rootCmd.PersistentFlags().BoolVarP(&cfg.Verbose, "verbose", "v", cfg.Verbose, "Enable verbose logging")
+	
+	// Add log level flag
+	rootCmd.PersistentFlags().Var(&logLevelFlag{&cfg.LogLevel}, "log-level", "Set log level (debug, info, warn, error)")
 }
 
 func initConfig() {
-	// Config is already initialized in init()
+	// Initialize logger with current config
+	logger.Init(cfg)
+	logger.Debug("Logger initialized", "verbose", cfg.Verbose, "level", cfg.LogLevel)
+}
+
+// logLevelFlag implements pflag.Value for slog.Level
+type logLevelFlag struct {
+	level *slog.Level
+}
+
+func (f *logLevelFlag) String() string {
+	switch *f.level {
+	case slog.LevelDebug:
+		return "debug"
+	case slog.LevelInfo:
+		return "info"
+	case slog.LevelWarn:
+		return "warn"
+	case slog.LevelError:
+		return "error"
+	default:
+		return "info"
+	}
+}
+
+func (f *logLevelFlag) Set(value string) error {
+	switch value {
+	case "debug":
+		*f.level = slog.LevelDebug
+	case "info":
+		*f.level = slog.LevelInfo
+	case "warn":
+		*f.level = slog.LevelWarn
+	case "error":
+		*f.level = slog.LevelError
+	default:
+		*f.level = slog.LevelInfo
+	}
+	return nil
+}
+
+func (f *logLevelFlag) Type() string {
+	return "string"
 }
