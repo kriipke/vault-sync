@@ -51,7 +51,7 @@ func main() {
 		log.Fatal("Failed to list secrets:", err)
 	}
 
-	if resp.Data == nil || resp.Data.Keys == nil {
+	if resp.Data.Keys == nil || len(resp.Data.Keys) == 0 {
 		fmt.Println("No secrets found at the specified path")
 		return
 	}
